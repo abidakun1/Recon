@@ -1,160 +1,243 @@
 #!/bin/bash
 
-printf "\n  MAd3 WithL0vE  \n\n"
+# ============================================================
+#  MAd3 WithL0vE  — Enhanced Recon Script
+# ============================================================
 
-RED="\033[1;31m" 
-RESET="\033[0m" 
+RED="\033[1;31m"
+GREEN="\033[1;32m"
+YELLOW="\033[1;33m"
+BLUE="\033[1;34m"
+RESET="\033[0m"
 
-TARGET=$1 
-DOMAIN="$1_domain" 
-INFO_PATH="$1_domain/info" 
-SUBDOMAIN_PATH="$1_domain/subdomain" 
-DIRECTORY_ENUM="$1_domain/directory_enum" 
-GAU_PATH="$1_domain/gau_data"
-SCREENSHOT="$1_domain/aqua_shot"
-
-if [ -z "$1" ] 
-  then
-    echo -e "${RED} [+] USAGE : ./enum.sh <target.com> ${RESET}" 
-exit 1 
-fi
- 
-if [ ! -d "$DOMAIN" ];then 
-mkdir $DOMAIN 
-fi
- 
-if [ ! -d "$INFO_PATH" ];then 
-mkdir $INFO_PATH 
-fi
- 
-if [ !  -d "$SUBDOMAIN_PATH" ];then 
-mkdir $SUBDOMAIN_PATH 
-fi 
-
-if [ ! -d "$DIRECTORY_ENUM" ];then
-        mkdir $DIRECTORY_ENUM 
-fi
- 
- if [ ! -d "$GAU_PATH" ];then 
-mkdir $GAU_PATH 
+# ---- Usage & Validation ----
+if [ -z "$1" ]; then
+  echo -e "${RED}[+] USAGE: ./enum.sh <target.com> [--skip-slow]${RESET}"
+  exit 1
 fi
 
-if [ !  -d "$SCREENSHOT" ];then 
-mkdir $SCREENSHOT
-fi 
- 
+TARGET=$1
+SKIP_SLOW=$2  # pass --skip-slow to skip amass/nuclei
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+DOMAIN="${TARGET}_${TIMESTAMP}"
+INFO_PATH="$DOMAIN/info"
+SUBDOMAIN_PATH="$DOMAIN/subdomain"
+DIRECTORY_ENUM="$DOMAIN/directory_enum"
+GAU_PATH="$DOMAIN/gau_data"
+SCREENSHOT="$DOMAIN/screenshots"
+VULN_PATH="$DOMAIN/vulns"
 
-printf "\n----- WHOIS -----\n\n" 
-echo -e "${RED} [+] Checking whois ... ${RESET}" 
-whois $TARGET > $INFO_PATH/whois.txt 
+# ---- Tool check ----
+check_tool() {
+  if ! command -v "$1" &>/dev/null; then
+    echo -e "${YELLOW}[!] $1 not found — skipping${RESET}"
+    return 1
+  fi
+  return 0
+}
 
-printf "\n----- DIG -----\n\n" 
-echo -e "${RED} [+] Dig @ Work ... ${RESET}" 
-dig $TARGET > $INFO_PATH/dig.txt 
-
-printf "\n----- NSLOOKUP -----\n\n" 
-echo -e "${RED} [+] Nslookup @ It ... ${RESET}" 
-nslookup $TARGET > $INFO_PATH/nslookup.txt 
-
-printf "\n----- NMAP -----\n\n" 
-echo -e "${RED} [+] Running Nmap ... ${RESET}" 
-nmap -sV -T3 -Pn -p3868,3366,8443,8080,9443,9091,3000,8000,5900,8081,6000,10000,8181,3306,5000,4000,8888,5432,15672,9999,161,4044,7077,4040,9000,8089,443,7447,7080,8880,8983,5673,7443,19000,19080 $TARGET |  grep -E 'open|filtered|closed' > $INFO_PATH/nmap.txt 
-
-printf "\n----- WHATWEB -----\n\n" 
-echo -e "${RED} [+] Checking 4 Whatweb ... ${RESET}" 
-whatweb $TARGET > $INFO_PATH/whatweb.txt 
-
-printf "\n----- PUBLIC API SUBDOMAIN ENUMERATION-----\n\n"
-echo -e "${RED} [+] Launching anubis... ${RESET}" 
-curl https://jldc.me/anubis/subdomains/$TARGET | jq -r ".[]" >> $SUBDOMAIN_PATH/found_subdomain.txt 
-
-echo -e "${RED} [+] Launching rapid... ${RESET}" 
-curl -s "https://rapiddns.io/subdomain/$TARGET?full=1" | grep -oE "[\.a-zA-Z0-9-]+\.$TARGET" | sort -u  >> $SUBDOMAIN_PATH/found_subdomain.txt  
-
-echo -e "${RED} [+] Launching crt.sh.. ${RESET}" 
- curl -s "https://crt.sh/?q=%25.$TARGET" | grep -oE "[\.a-zA-Z0-9-]+\.$TARGET" | sort -u >> $SUBDOMAIN_PATH/found_subdomain.txt  
-
-printf "\n----- TOOLS SUBDOMAIN ENUMERATION -----\n\n" 
-echo -e "${RED} [+] Launching findomain ... ${RESET}" 
-findomain -t $TARGET >> $SUBDOMAIN_PATH/found_subdomain.txt 
-
-printf "\n----- DNSRECON -----\n\n" 
-echo -e "${RED} [+] Launching dnsrecon ... ${RESET}" 
-gobuster dns --wildcard -d $TARGET --wildcard -w /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt > $SUBDOMAIN_PATH/dns_subdomain.txt
-
-printf "\n----- AMASS -----\n\n" 
-echo -e "${RED} [+] Launching Amass ... ${RESET}" 
-amass enum -d $TARGET >> $SUBDOMAIN_PATH/found_subdomain.txt 
-
-printf "\n----- SUBFINDER -----\n\n" 
-echo -e "${RED} [+] Launching Subfinder ... ${RESET}" 
-subfinder -silent -d $TARGET  >> $SUBDOMAIN_PATH/found_subdomain.txt 
-
-printf "\n----- SUBLIST3R -----\n\n" 
-echo -e "${RED} [+] Launching Sublist3r ... ${RESET}" 
-sublist3r -d $TARGET >> $SUBDOMAIN_PATH/found_subdomain.txt 
-
-printf "\n----- ASSETFINDER -----\n\n" 
-echo -e "${RED} [+] Launching Assetfinder... ${RESET}" 
-assetfinder --subs-only $TARGET >> $SUBDOMAIN_PATH/found_subdomain.txt 
-
-printf "\n----- FINALLY TIME TO PROBE ALIVE SUBDOMAIN -----\n\n" 
-echo -e "${RED} [+] Checking What's Alive... ${RESET}" 
-cat $SUBDOMAIN_PATH/found_subdomain.txt | sort -u | httpx-toolkit -mc 200,302,403 | tee -a $SUBDOMAIN_PATH/responsive.txt
-cat $SUBDOMAIN_PATH/responsive.txt  | sed 's/\http\:\/\///g' |  sed 's/\https\:\/\///g' | sort -u | tee -a  $SUBDOMAIN_PATH/urllist.txt
-echo  "Total of $(wc -l $SUBDOMAIN_PATH/urllist.txt | awk '{print $1}') live subdomains were found"
-
-printf "\n----- TIME TO TAKE SCREENSHOTS OF ALL PROBE SUBDOMAIN -----\n\n" 
-echo "Starting aquatone scan..."
-cat $SUBDOMAIN_PATH/responsive.txt | aquatone -silent -out $SCREENSHOT 
-
-
-printf "\n----- SCRAPE4SCRAPE -----\n\n" 
-echo "Scraping wayback for data..."
-cat $SUBDOMAIN_PATH/urllist.txt | gau > $GAU_PATH/gaus.txt
-cat $GAU_PATH/gaus.txt | sort -u |  unfurl --unique keys > $GAU_PATH/paramlist.txt
-[ -s   $GAU_PATH/paramlist.txt ] && echo "Wordlist saved to  $GAU_PATH/paramlist.txt"
-
-
-cat $GAU_PATH/gaus.txt | sort -u | grep -P "\w+\.js(\?|$)" | sort -u  > $GAU_PATH/jsurls.txt
-[ -s  $GAU_PATH/jsurls.txt ] && echo "JS Urls saved to   $GAU_PATH/jsurls.txt"
-
-cat $GAU_PATH/gaus.txt | sort -u | grep -P "\w+\.php(\?|$)" | sort -u  > $GAU_PATH/phpurls.txt
-[ -s   $GAU_PATH/phpurls.txt ] && echo "PHP Urls saved to  $GAU_PATH/phpurls.txt"
-
-cat  $GAU_PATH/gaus.txt | sort -u | grep -P "\w+\.aspx(\?|$)" | sort -u  > $GAU_PATH/aspxurls.txt
-[ -s  $GAU_PATH/aspxurls.txt ] && echo "ASPX Urls saved to  $GAU_PATH/aspxurls.txt"
-
-cat  $GAU_PATH/gaus.txt | sort -u | grep -P "\w+\.jsp(\?|$)" | sort -u  >  $GAU_PATH/jspurls.txt
-[ -s  $GAU_PATH/jsurls.txt ] && echo "JSP Urls saved to  $GAU_PATH/jspurls.txt"
-
-
-
-
-printf "\n----- VULNERABILITY SCANNING-----\n\n" 
-echo -e "${RED} [+] Running Nuclei Scanner... Let see what Info we could find.... ${RESET}" 
-echo -e "${RED} [+] This may take some time... Make sure you take a break and have a coffee....${RESET}"
-cat $SUBDOMAIN_PATH/urllist.txt | nuclei  > $INFO_PATH/nuclei.txt
-
-#echo -e "${RED} [+] Running Nikto Scanner... Let see what Info we could find.... ${RESET}" 
-
-#for i in "cat $SUBDOMAIN_PATH/responsive.txt";
-#do 
-#wapiti -u $i >> $INFO_PATH/wapiti.txt
+# ---- Setup directories ----
+for dir in "$DOMAIN" "$INFO_PATH" "$SUBDOMAIN_PATH" "$DIRECTORY_ENUM" "$GAU_PATH" "$SCREENSHOT" "$VULN_PATH"; do
+  mkdir -p "$dir"
 done
 
-#printf "\n----- DIRECTORY ENUM TIME -----\n\n" 
-#echo -e "${RED} [+] Starting Directory Enumeration...... ${RESET}" 
-#echo -e "${RED} [+]Doing FFUF subdomain enum...${RESET}" 
-#echo -e "${RED} [+] This may take some time... Make sure you take a break and have a coffee....${RESET}" 
+LOG="$DOMAIN/recon.log"
+exec > >(tee -a "$LOG") 2>&1
+echo -e "${GREEN}[*] Starting recon on $TARGET at $TIMESTAMP${RESET}"
+echo -e "${GREEN}[*] Output folder: $DOMAIN${RESET}"
 
-#cat $SUBDOMAIN_PATH/alive.txt | sed -e 's/^http:\/\///g' -e 's/^https:\/\///g' |  while read y;
-#do
+# ---- Helper: timestamped section header ----
+section() {
+  echo -e "\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+  echo -e "${BLUE} $1${RESET}"
+  echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}\n"
+}
 
-#dirsearch -u https://$y/FUZZ   -w /usr/share/seclists/Discovery/Web-Content/directory-list-2.3-small.txt >> $DIRECTORY_ENUM/ffuf_enum.txt
-#or 
-#gobuster dir -u https://$y -w /usr/share/seclists/Discovery/Web-Content/common.txt >>  $DIRECTORY_ENUM/ffuf_enum.txt
-#done 
+# ============================================================
+# PASSIVE INFO GATHERING
+# ============================================================
+section "WHOIS / DIG / NSLOOKUP"
+whois "$TARGET" > "$INFO_PATH/whois.txt" && echo -e "${GREEN}[+] whois done${RESET}"
+dig "$TARGET" any > "$INFO_PATH/dig.txt" && echo -e "${GREEN}[+] dig done${RESET}"
+nslookup "$TARGET" > "$INFO_PATH/nslookup.txt" && echo -e "${GREEN}[+] nslookup done${RESET}"
 
-echo -e "DONE"
-exit
+# ASN / IP info
+section "IP & ASN INFO"
+IP=$(dig +short "$TARGET" | head -1)
+echo "IP: $IP" | tee "$INFO_PATH/ip_asn.txt"
+curl -s "https://ipinfo.io/$IP/json" | tee -a "$INFO_PATH/ip_asn.txt"
+curl -s "https://api.hackertarget.com/aslookup/?q=$IP" | tee -a "$INFO_PATH/ip_asn.txt"
+
+# ---- WhatWeb ----
+section "WHATWEB"
+if check_tool whatweb; then
+  whatweb -a 3 "$TARGET" | tee "$INFO_PATH/whatweb.txt"
+fi
+
+# ============================================================
+# PORT SCANNING
+# ============================================================
+section "NMAP"
+if check_tool nmap; then
+  # Quick top-ports scan first
+  nmap -sV -T4 -Pn --top-ports 1000 "$TARGET" -oA "$INFO_PATH/nmap_quick" | \
+    grep -E 'open|filtered' | tee "$INFO_PATH/nmap.txt"
+fi
+
+# ============================================================
+# SUBDOMAIN ENUMERATION
+# ============================================================
+section "PUBLIC API SUBDOMAIN ENUM"
+
+# Passive APIs (run in parallel)
+{
+  curl -s "https://jldc.me/anubis/subdomains/$TARGET" | jq -r '.[]' 2>/dev/null
+} &
+{
+  curl -s "https://rapiddns.io/subdomain/$TARGET?full=1" | grep -oE "[\.a-zA-Z0-9-]+\.$TARGET"
+} &
+{
+  curl -s "https://crt.sh/?q=%25.$TARGET" | grep -oE "[\.a-zA-Z0-9-]+\.$TARGET"
+} &
+{
+  curl -s "https://api.hackertarget.com/hostsearch/?q=$TARGET" | cut -d',' -f1
+} &
+{
+  curl -s "https://otx.alienvault.com/api/v1/indicators/domain/$TARGET/passive_dns" | \
+    jq -r '.passive_dns[].hostname' 2>/dev/null
+} &
+wait
+# Collect all to file
+curl -s "https://jldc.me/anubis/subdomains/$TARGET" | jq -r '.[]' 2>/dev/null >> "$SUBDOMAIN_PATH/found_subdomain.txt"
+curl -s "https://rapiddns.io/subdomain/$TARGET?full=1" | grep -oE "[\.a-zA-Z0-9-]+\.$TARGET" >> "$SUBDOMAIN_PATH/found_subdomain.txt"
+curl -s "https://crt.sh/?q=%25.$TARGET" | grep -oE "[\.a-zA-Z0-9-]+\.$TARGET" >> "$SUBDOMAIN_PATH/found_subdomain.txt"
+curl -s "https://api.hackertarget.com/hostsearch/?q=$TARGET" | cut -d',' -f1 >> "$SUBDOMAIN_PATH/found_subdomain.txt"
+curl -s "https://otx.alienvault.com/api/v1/indicators/domain/$TARGET/passive_dns" | \
+  jq -r '.passive_dns[].hostname' 2>/dev/null >> "$SUBDOMAIN_PATH/found_subdomain.txt"
+
+section "TOOL-BASED SUBDOMAIN ENUM"
+check_tool findomain   && findomain -t "$TARGET" -q >> "$SUBDOMAIN_PATH/found_subdomain.txt"
+check_tool subfinder   && subfinder -silent -d "$TARGET" >> "$SUBDOMAIN_PATH/found_subdomain.txt"
+check_tool assetfinder && assetfinder --subs-only "$TARGET" >> "$SUBDOMAIN_PATH/found_subdomain.txt"
+check_tool sublist3r   && sublist3r -d "$TARGET" -o "$SUBDOMAIN_PATH/sublist3r.txt" && \
+  cat "$SUBDOMAIN_PATH/sublist3r.txt" >> "$SUBDOMAIN_PATH/found_subdomain.txt"
+
+# DNS brute (faster wordlist by default)
+if check_tool gobuster; then
+  WORDLIST="/usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt"
+  [ ! -f "$WORDLIST" ] && WORDLIST="/usr/share/wordlists/dirb/common.txt"
+  gobuster dns -d "$TARGET" -w "$WORDLIST" -q 2>/dev/null | \
+    grep -oE "[\.a-zA-Z0-9-]+\.$TARGET" >> "$SUBDOMAIN_PATH/found_subdomain.txt"
+fi
+
+# Amass — slow, skip with --skip-slow
+if [ "$SKIP_SLOW" != "--skip-slow" ] && check_tool amass; then
+  section "AMASS (passive)"
+  amass enum -passive -d "$TARGET" >> "$SUBDOMAIN_PATH/found_subdomain.txt"
+fi
+
+# Deduplicate
+sort -u "$SUBDOMAIN_PATH/found_subdomain.txt" -o "$SUBDOMAIN_PATH/found_subdomain.txt"
+TOTAL=$(wc -l < "$SUBDOMAIN_PATH/found_subdomain.txt")
+echo -e "${GREEN}[+] $TOTAL unique subdomains found${RESET}"
+
+# ============================================================
+# PROBE ALIVE SUBDOMAINS
+# ============================================================
+section "PROBING ALIVE SUBDOMAINS"
+if check_tool httpx-toolkit || check_tool httpx; then
+  HTTPX=$(command -v httpx-toolkit || command -v httpx)
+  cat "$SUBDOMAIN_PATH/found_subdomain.txt" | \
+    $HTTPX -mc 200,301,302,403,401,405 -silent -threads 50 | \
+    tee "$SUBDOMAIN_PATH/responsive.txt"
+
+  # Clean URL list (strip protocol)
+  sed -E 's|https?://||g' "$SUBDOMAIN_PATH/responsive.txt" | sort -u > "$SUBDOMAIN_PATH/urllist.txt"
+  echo -e "${GREEN}[+] $(wc -l < "$SUBDOMAIN_PATH/urllist.txt") live subdomains${RESET}"
+fi
+
+# ============================================================
+# SCREENSHOTS
+# ============================================================
+section "SCREENSHOTS"
+if check_tool gowitness; then
+  gowitness file -f "$SUBDOMAIN_PATH/responsive.txt" -P "$SCREENSHOT" --no-http
+elif check_tool aquatone; then
+  cat "$SUBDOMAIN_PATH/responsive.txt" | aquatone -silent -out "$SCREENSHOT"
+fi
+
+# ============================================================
+# GAU / URL SCRAPING
+# ============================================================
+section "GAU - WAYBACK SCRAPING"
+if check_tool gau; then
+  cat "$SUBDOMAIN_PATH/urllist.txt" | gau --threads 5 | tee "$GAU_PATH/gaus.txt"
+
+  # Also try katana for JS crawling
+  if check_tool katana; then
+    cat "$SUBDOMAIN_PATH/responsive.txt" | katana -silent -jc | tee -a "$GAU_PATH/gaus.txt"
+  fi
+
+  sort -u "$GAU_PATH/gaus.txt" -o "$GAU_PATH/gaus.txt"
+
+  # Extract interesting URLs by type
+  grep -P "\w+\.js(\?|$)"   "$GAU_PATH/gaus.txt" | sort -u > "$GAU_PATH/jsurls.txt"
+  grep -P "\w+\.php(\?|$)"  "$GAU_PATH/gaus.txt" | sort -u > "$GAU_PATH/phpurls.txt"
+  grep -P "\w+\.aspx(\?|$)" "$GAU_PATH/gaus.txt" | sort -u > "$GAU_PATH/aspxurls.txt"
+  grep -P "\w+\.jsp(\?|$)"  "$GAU_PATH/gaus.txt" | sort -u > "$GAU_PATH/jspurls.txt"
+
+  # Parameters & endpoints
+  check_tool unfurl && cat "$GAU_PATH/gaus.txt" | unfurl --unique keys > "$GAU_PATH/paramlist.txt"
+
+  # Interesting patterns — potential vulns
+  grep -iE "redirect|url=|next=|return=|goto=" "$GAU_PATH/gaus.txt" | sort -u > "$VULN_PATH/open_redirect_candidates.txt"
+  grep -iE "\.sql|\.bak|\.env|\.log|\.conf|\.zip|\.tar" "$GAU_PATH/gaus.txt" | sort -u > "$VULN_PATH/sensitive_file_candidates.txt"
+  grep -iE "admin|dashboard|panel|config|backup|\.git" "$GAU_PATH/gaus.txt" | sort -u > "$VULN_PATH/interesting_paths.txt"
+
+  for f in jsurls phpurls aspxurls jspurls paramlist; do
+    COUNT=$(wc -l < "$GAU_PATH/${f}.txt" 2>/dev/null || echo 0)
+    [ "$COUNT" -gt 0 ] && echo -e "${GREEN}[+] $COUNT entries → $GAU_PATH/${f}.txt${RESET}"
+  done
+fi
+
+# ============================================================
+# VULNERABILITY SCANNING
+# ============================================================
+if [ "$SKIP_SLOW" != "--skip-slow" ]; then
+  section "NUCLEI SCANNING"
+  if check_tool nuclei; then
+    # Severity-filtered, skip info noise
+    nuclei -l "$SUBDOMAIN_PATH/urllist.txt" \
+      -severity low,medium,high,critical \
+      -silent \
+      -o "$VULN_PATH/nuclei.txt" \
+      -stats
+    echo -e "${GREEN}[+] Nuclei done → $VULN_PATH/nuclei.txt${RESET}"
+  fi
+fi
+
+# ============================================================
+# SUMMARY REPORT
+# ============================================================
+section "SUMMARY"
+SUMMARY="$DOMAIN/summary.txt"
+{
+  echo "===== RECON SUMMARY: $TARGET ====="
+  echo "Date: $TIMESTAMP"
+  echo ""
+  echo "Subdomains found:  $(wc -l < "$SUBDOMAIN_PATH/found_subdomain.txt" 2>/dev/null || echo 0)"
+  echo "Live subdomains:   $(wc -l < "$SUBDOMAIN_PATH/urllist.txt" 2>/dev/null || echo 0)"
+  echo "Total URLs (gau):  $(wc -l < "$GAU_PATH/gaus.txt" 2>/dev/null || echo 0)"
+  echo "JS URLs:           $(wc -l < "$GAU_PATH/jsurls.txt" 2>/dev/null || echo 0)"
+  echo "Parameters:        $(wc -l < "$GAU_PATH/paramlist.txt" 2>/dev/null || echo 0)"
+  echo "Nuclei findings:   $(wc -l < "$VULN_PATH/nuclei.txt" 2>/dev/null || echo 0)"
+  echo ""
+  echo "Open redirect candidates: $(wc -l < "$VULN_PATH/open_redirect_candidates.txt" 2>/dev/null || echo 0)"
+  echo "Sensitive files:          $(wc -l < "$VULN_PATH/sensitive_file_candidates.txt" 2>/dev/null || echo 0)"
+  echo "Interesting paths:        $(wc -l < "$VULN_PATH/interesting_paths.txt" 2>/dev/null || echo 0)"
+  echo ""
+  echo "Output directory: $DOMAIN/"
+} | tee "$SUMMARY"
+
+echo -e "\n${GREEN}[✓] DONE — full log at $LOG${RESET}\n"
+exit 0
