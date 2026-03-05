@@ -17,6 +17,10 @@ show_help() {
   echo -e "${BOLD}${BLUE}"
   echo "  ███╗   ███╗ █████╗ ██████╗ ██████╗ "
   echo "  ████╗ ████║██╔══██╗██╔══██╗╚════██╗"
+  echo "  ██╔████╔██║███████║██║  ██║ █████╔╝"
+  echo "  ██║╚██╔╝██║██╔══██║██║  ██║ ╚═══██╗"
+  echo "  ██║ ╚═╝ ██║██║  ██║██████╔╝██████╔╝"
+  echo "  ╚═╝     ╚═╝╚═╝  ╚═╝╚═════╝ ╚═════╝ "
   echo -e "${CYAN}         MAd3 WithL0vE — Recon Script${RESET}"
   echo ""
   echo -e "${BOLD}USAGE:${RESET}"
@@ -146,51 +150,56 @@ fi
 # ============================================================
 section "PUBLIC API SUBDOMAIN ENUM"
 
-# Passive APIs (run in parallel)
-{
-  curl -s "https://jldc.me/anubis/subdomains/$TARGET" | jq -r '.[]' 2>/dev/null
-} &
-{
-  curl -s "https://rapiddns.io/subdomain/$TARGET?full=1" | grep -oE "[\.a-zA-Z0-9-]+\.$TARGET"
-} &
-{
-  curl -s "https://crt.sh/?q=%25.$TARGET" | grep -oE "[\.a-zA-Z0-9-]+\.$TARGET"
-} &
-{
-  curl -s "https://api.hackertarget.com/hostsearch/?q=$TARGET" | cut -d',' -f1
-} &
-{
+# Helper: strip leading dots, blank lines, and entries that don't end in target
+clean_subs() {
+  grep -E "\.?[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*\.$TARGET$" | \
+    sed 's/^\.//' | grep -v "^\." | sort -u
+}
+
+# Passive APIs (run in parallel, output only to file — no terminal spam)
+(
+  curl -s "https://jldc.me/anubis/subdomains/$TARGET" | jq -r '.[]' 2>/dev/null | clean_subs
+) >> "$SUBDOMAIN_PATH/found_subdomain.txt" &
+
+(
+  curl -s "https://rapiddns.io/subdomain/$TARGET?full=1" | grep -oE "[a-zA-Z0-9][\.a-zA-Z0-9-]*\.$TARGET" | clean_subs
+) >> "$SUBDOMAIN_PATH/found_subdomain.txt" &
+
+(
+  curl -s "https://crt.sh/?q=%25.$TARGET" | grep -oE "[a-zA-Z0-9][\.a-zA-Z0-9-]*\.$TARGET" | clean_subs
+) >> "$SUBDOMAIN_PATH/found_subdomain.txt" &
+
+(
+  curl -s "https://api.hackertarget.com/hostsearch/?q=$TARGET" | cut -d',' -f1 | clean_subs
+) >> "$SUBDOMAIN_PATH/found_subdomain.txt" &
+
+(
   curl -s "https://otx.alienvault.com/api/v1/indicators/domain/$TARGET/passive_dns" | \
-    jq -r '.passive_dns[].hostname' 2>/dev/null
-} &
+    jq -r '.passive_dns[].hostname' 2>/dev/null | clean_subs
+) >> "$SUBDOMAIN_PATH/found_subdomain.txt" &
+
 wait
-# Collect all to file
-curl -s "https://jldc.me/anubis/subdomains/$TARGET" | jq -r '.[]' 2>/dev/null >> "$SUBDOMAIN_PATH/found_subdomain.txt"
-curl -s "https://rapiddns.io/subdomain/$TARGET?full=1" | grep -oE "[\.a-zA-Z0-9-]+\.$TARGET" >> "$SUBDOMAIN_PATH/found_subdomain.txt"
-curl -s "https://crt.sh/?q=%25.$TARGET" | grep -oE "[\.a-zA-Z0-9-]+\.$TARGET" >> "$SUBDOMAIN_PATH/found_subdomain.txt"
-curl -s "https://api.hackertarget.com/hostsearch/?q=$TARGET" | cut -d',' -f1 >> "$SUBDOMAIN_PATH/found_subdomain.txt"
-curl -s "https://otx.alienvault.com/api/v1/indicators/domain/$TARGET/passive_dns" | \
-  jq -r '.passive_dns[].hostname' 2>/dev/null >> "$SUBDOMAIN_PATH/found_subdomain.txt"
+echo -e "${GREEN}[+] Passive API collection done${RESET}"
 
 section "TOOL-BASED SUBDOMAIN ENUM"
-check_tool findomain   && findomain -t "$TARGET" -q >> "$SUBDOMAIN_PATH/found_subdomain.txt"
-check_tool subfinder   && subfinder -silent -d "$TARGET" >> "$SUBDOMAIN_PATH/found_subdomain.txt"
-check_tool assetfinder && assetfinder --subs-only "$TARGET" >> "$SUBDOMAIN_PATH/found_subdomain.txt"
-check_tool sublist3r   && sublist3r -d "$TARGET" -o "$SUBDOMAIN_PATH/sublist3r.txt" && \
-  cat "$SUBDOMAIN_PATH/sublist3r.txt" >> "$SUBDOMAIN_PATH/found_subdomain.txt"
+check_tool findomain   && findomain -t "$TARGET" -q 2>/dev/null | clean_subs >> "$SUBDOMAIN_PATH/found_subdomain.txt"
+check_tool subfinder   && subfinder -silent -d "$TARGET" 2>/dev/null | clean_subs >> "$SUBDOMAIN_PATH/found_subdomain.txt"
+check_tool assetfinder && assetfinder --subs-only "$TARGET" 2>/dev/null | clean_subs >> "$SUBDOMAIN_PATH/found_subdomain.txt"
+check_tool sublist3r   && sublist3r -d "$TARGET" -o "$SUBDOMAIN_PATH/sublist3r.txt" -q 2>/dev/null && \
+  clean_subs < "$SUBDOMAIN_PATH/sublist3r.txt" >> "$SUBDOMAIN_PATH/found_subdomain.txt"
 
 # DNS brute (faster wordlist by default)
 if check_tool gobuster; then
   WORDLIST="/usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt"
   [ ! -f "$WORDLIST" ] && WORDLIST="/usr/share/wordlists/dirb/common.txt"
   gobuster dns -d "$TARGET" -w "$WORDLIST" -q 2>/dev/null | \
-    grep -oE "[\.a-zA-Z0-9-]+\.$TARGET" >> "$SUBDOMAIN_PATH/found_subdomain.txt"
+    grep -oE "[a-zA-Z0-9][\.a-zA-Z0-9-]*\.$TARGET" | clean_subs >> "$SUBDOMAIN_PATH/found_subdomain.txt"
 fi
 
 # Amass — slow, skip with --skip-slow
 if [ "$SKIP_SLOW" != "--skip-slow" ] && check_tool amass; then
   section "AMASS (passive)"
-  amass enum -passive -d "$TARGET" >> "$SUBDOMAIN_PATH/found_subdomain.txt"
+  amass enum -passive -d "$TARGET" 2>/dev/null | clean_subs >> "$SUBDOMAIN_PATH/found_subdomain.txt"
 fi
 
 # Deduplicate
