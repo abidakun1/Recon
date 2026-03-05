@@ -156,30 +156,38 @@ clean_subs() {
     sed 's/^\.//' | grep -v "^\." | sort -u
 }
 
-# Passive APIs (run in parallel, output only to file — no terminal spam)
-(
-  curl -s "https://jldc.me/anubis/subdomains/$TARGET" | jq -r '.[]' 2>/dev/null | clean_subs
-) >> "$SUBDOMAIN_PATH/found_subdomain.txt" &
+# Passive APIs — parallel with 30s timeout each, live spinner, no terminal spam
+API_TIMEOUT=30
+FOUND="$SUBDOMAIN_PATH/found_subdomain.txt"
 
-(
-  curl -s "https://rapiddns.io/subdomain/$TARGET?full=1" | grep -oE "[a-zA-Z0-9][\.a-zA-Z0-9-]*\.$TARGET" | clean_subs
-) >> "$SUBDOMAIN_PATH/found_subdomain.txt" &
+_api() {
+  local label="$1"; shift
+  ( timeout "$API_TIMEOUT" bash -c "$*" >> "$FOUND" 2>/dev/null
+    echo -e "${GREEN}[+] $label done${RESET}" ) &
+  echo $!
+}
 
-(
-  curl -s "https://crt.sh/?q=%25.$TARGET" | grep -oE "[a-zA-Z0-9][\.a-zA-Z0-9-]*\.$TARGET" | clean_subs
-) >> "$SUBDOMAIN_PATH/found_subdomain.txt" &
+PID1=$(_api "anubis"       "curl -s --max-time $API_TIMEOUT 'https://jldc.me/anubis/subdomains/$TARGET' | jq -r '.[]' 2>/dev/null | sed 's/^\\.//; /^$/d'")
+PID2=$(_api "rapiddns"     "curl -s --max-time $API_TIMEOUT 'https://rapiddns.io/subdomain/$TARGET?full=1' | grep -oE '[a-zA-Z0-9][.a-zA-Z0-9-]*\\.${TARGET}'")
+PID3=$(_api "crt.sh"       "curl -s --max-time $API_TIMEOUT 'https://crt.sh/?q=%25.${TARGET}' | grep -oE '[a-zA-Z0-9][.a-zA-Z0-9-]*\\.${TARGET}'")
+PID4=$(_api "hackertarget" "curl -s --max-time $API_TIMEOUT 'https://api.hackertarget.com/hostsearch/?q=${TARGET}' | cut -d',' -f1")
+PID5=$(_api "otx"          "curl -s --max-time $API_TIMEOUT 'https://otx.alienvault.com/api/v1/indicators/domain/${TARGET}/passive_dns' | jq -r '.passive_dns[].hostname' 2>/dev/null")
 
-(
-  curl -s "https://api.hackertarget.com/hostsearch/?q=$TARGET" | cut -d',' -f1 | clean_subs
-) >> "$SUBDOMAIN_PATH/found_subdomain.txt" &
-
-(
-  curl -s "https://otx.alienvault.com/api/v1/indicators/domain/$TARGET/passive_dns" | \
-    jq -r '.passive_dns[].hostname' 2>/dev/null | clean_subs
-) >> "$SUBDOMAIN_PATH/found_subdomain.txt" &
+# Spinner while background jobs run
+_spin() {
+  local frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏') i=0
+  while kill -0 $PID1 $PID2 $PID3 $PID4 $PID5 2>/dev/null; do
+    local n; n=$(wc -l < "$FOUND" 2>/dev/null || echo 0)
+    printf "\r${YELLOW}  %s  Querying APIs... (%d entries so far)   ${RESET}" "${frames[$i]}" "$n"
+    i=$(( (i+1) % 10 )); sleep 0.15
+  done
+  printf "\r%-60s\r" " "
+}
+_spin
 
 wait
-echo -e "${GREEN}[+] Passive API collection done${RESET}"
+sort -u "$FOUND" -o "$FOUND"
+echo -e "${GREEN}[+] Passive API collection done — $(wc -l < "$FOUND") entries${RESET}"
 
 section "TOOL-BASED SUBDOMAIN ENUM"
 check_tool findomain   && findomain -t "$TARGET" -q 2>/dev/null | clean_subs >> "$SUBDOMAIN_PATH/found_subdomain.txt"
