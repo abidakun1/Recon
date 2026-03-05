@@ -8,12 +8,69 @@ RED="\033[1;31m"
 GREEN="\033[1;32m"
 YELLOW="\033[1;33m"
 BLUE="\033[1;34m"
+CYAN="\033[1;36m"
+BOLD="\033[1m"
 RESET="\033[0m"
 
+# ---- Help ----
+show_help() {
+  echo -e "${BOLD}${BLUE}"
+  echo "  ███╗   ███╗ █████╗ ██████╗ ██████╗ "
+  echo "  ████╗ ████║██╔══██╗██╔══██╗╚════██╗"
+  echo -e "${CYAN}         MAd3 WithL0vE — Recon Script${RESET}"
+  echo ""
+  echo -e "${BOLD}USAGE:${RESET}"
+  echo -e "  ./enum.sh <target.com> [OPTIONS]"
+  echo ""
+  echo -e "${BOLD}ARGUMENTS:${RESET}"
+  echo -e "  ${GREEN}<target.com>${RESET}       Target domain to enumerate (required)"
+  echo ""
+  echo -e "${BOLD}OPTIONS:${RESET}"
+  echo -e "  ${GREEN}-h, --help${RESET}         Show this help message and exit"
+  echo -e "  ${GREEN}--skip-slow${RESET}        Skip slow tools: amass, nuclei"
+  echo ""
+  echo -e "${BOLD}RECON STAGES:${RESET}"
+  echo -e "  ${CYAN}[1]${RESET} Passive Info     whois, dig, nslookup, ASN/IP lookup, WhatWeb"
+  echo -e "  ${CYAN}[2]${RESET} Port Scanning    nmap top-1000 ports (-sV -T4 -Pn)"
+  echo -e "  ${CYAN}[3]${RESET} Subdomain Enum   APIs: crt.sh, anubis, rapiddns, hackertarget, OTX"
+  echo -e "                   Tools: findomain, subfinder, assetfinder, sublist3r, gobuster"
+  echo -e "                   Slow: amass (skip with --skip-slow)"
+  echo -e "  ${CYAN}[4]${RESET} Probe Alive      httpx — filters 200/301/302/401/403/405"
+  echo -e "  ${CYAN}[5]${RESET} Screenshots      gowitness or aquatone"
+  echo -e "  ${CYAN}[6]${RESET} URL Scraping     gau (wayback) + katana (JS crawl)"
+  echo -e "                   Extracts: .js .php .aspx .jsp URLs, params, redirect/sensitive candidates"
+  echo -e "  ${CYAN}[7]${RESET} Vuln Scanning    nuclei (low→critical) (skip with --skip-slow)"
+  echo -e "  ${CYAN}[8]${RESET} Summary Report   summary.txt + full recon.log"
+  echo ""
+  echo -e "${BOLD}OUTPUT STRUCTURE:${RESET}"
+  echo -e "  ${YELLOW}<target>_<timestamp>/${RESET}"
+  echo -e "  ├── info/             whois, dig, nslookup, nmap, ip/asn, whatweb"
+  echo -e "  ├── subdomain/        found_subdomain.txt, responsive.txt, urllist.txt"
+  echo -e "  ├── directory_enum/   (reserved for future directory brute-forcing)"
+  echo -e "  ├── gau_data/         gaus.txt, jsurls, phpurls, aspxurls, jspurls, paramlist"
+  echo -e "  ├── screenshots/      gowitness / aquatone output"
+  echo -e "  ├── vulns/            nuclei.txt, open_redirect, sensitive_files, interesting_paths"
+  echo -e "  ├── summary.txt       quick-glance stats"
+  echo -e "  └── recon.log         full timestamped log"
+  echo ""
+  echo -e "${BOLD}EXAMPLES:${RESET}"
+  echo -e "  ./enum.sh example.com"
+  echo -e "  ./enum.sh example.com --skip-slow"
+  echo ""
+  echo -e "${BOLD}REQUIRED TOOLS (passive, always):${RESET}"
+  echo -e "  whois, dig, nslookup, curl, jq, nmap"
+  echo ""
+  echo -e "${BOLD}OPTIONAL TOOLS (gracefully skipped if missing):${RESET}"
+  echo -e "  whatweb, findomain, subfinder, assetfinder, sublist3r,"
+  echo -e "  gobuster, amass, httpx/httpx-toolkit, gowitness, aquatone,"
+  echo -e "  gau, katana, unfurl, nuclei"
+  echo ""
+}
+
 # ---- Usage & Validation ----
-if [ -z "$1" ]; then
-  echo -e "${RED}[+] USAGE: ./enum.sh <target.com> [--skip-slow]${RESET}"
-  exit 1
+if [ -z "$1" ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+  show_help
+  [ -z "$1" ] && exit 1 || exit 0
 fi
 
 TARGET=$1
