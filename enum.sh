@@ -313,11 +313,11 @@ fi
 # ============================================================
 section "GAU - WAYBACK SCRAPING"
 if check_tool gau; then
-  cat "$SUBDOMAIN_PATH/urllist.txt" | gau --threads 5 | tee "$GAU_PATH/gaus.txt"
+  cat "$SUBDOMAIN_PATH/urllist.txt" | gau --threads 5 > "$GAU_PATH/gaus.txt"
 
   # Also try katana for JS crawling
   if check_tool katana; then
-    cat "$SUBDOMAIN_PATH/responsive.txt" | katana -silent -jc | tee -a "$GAU_PATH/gaus.txt"
+    cat "$SUBDOMAIN_PATH/responsive.txt" | katana -silent -jc >> "$GAU_PATH/gaus.txt"
   fi
 
   sort -u "$GAU_PATH/gaus.txt" -o "$GAU_PATH/gaus.txt"
@@ -362,6 +362,11 @@ fi
 # SUMMARY REPORT
 # ============================================================
 section "SUMMARY"
+# Pre-touch vuln files so wc -l never errors on missing files
+touch "$VULN_PATH/nuclei.txt" "$VULN_PATH/open_redirect_candidates.txt" \
+      "$VULN_PATH/sensitive_file_candidates.txt" "$VULN_PATH/interesting_paths.txt" \
+      "$GAU_PATH/gaus.txt" "$GAU_PATH/jsurls.txt" "$GAU_PATH/paramlist.txt" \
+      "$SUBDOMAIN_PATH/urllist.txt" 2>/dev/null
 SUMMARY="$DOMAIN/summary.txt"
 {
   echo "===== RECON SUMMARY: $TARGET ====="
@@ -381,5 +386,7 @@ SUMMARY="$DOMAIN/summary.txt"
   echo "Output directory: $DOMAIN/"
 } | tee "$SUMMARY"
 
-echo -e "\n${GREEN}[✓] DONE — full log at $LOG${RESET}\n"
+echo -e "
+${GREEN}[+] DONE -- full log at $LOG${RESET}
+"
 exit 0
