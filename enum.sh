@@ -80,7 +80,7 @@ fi
 TARGET=$1
 SKIP_SLOW=$2  # pass --skip-slow to skip amass/nuclei
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-DOMAIN="${TARGET}_${TIMESTAMP}"
+DOMAIN="$(pwd)/${TARGET}_${TIMESTAMP}"
 INFO_PATH="$DOMAIN/info"
 SUBDOMAIN_PATH="$DOMAIN/subdomain"
 DIRECTORY_ENUM="$DOMAIN/directory_enum"
@@ -156,52 +156,120 @@ clean_subs() {
     sed 's/^\.//' | grep -v "^\." | sort -u
 }
 
-# Passive APIs — parallel with 30s timeout each, live spinner, no terminal spam
-API_TIMEOUT=30
-FOUND="$SUBDOMAIN_PATH/found_subdomain.txt"
+# Passive APIs — parallel, 60s timeout, per-source counts, spinner on /dev/tty
+API_TIMEOUT=60
 
-_api() {
-  local label="$1"; shift
-  ( timeout "$API_TIMEOUT" bash -c "$*" >> "$FOUND" 2>/dev/null
-    echo -e "${GREEN}[+] $label done${RESET}" ) &
-  echo $!
+# Resolve absolute paths and pre-create the output file so the spinner never errors
+FOUND="${SUBDOMAIN_PATH}/found_subdomain.txt"
+TMPDIR_API="$SUBDOMAIN_PATH"
+export FOUND TMPDIR_API TARGET
+touch "$FOUND"  # ensure file exists before spinner or any subshell reads it
+
+# crt.sh needs JSON endpoint to avoid HTML noise
+_fetch_and_report() {
+  local label="$1"
+  local tmpfile="${TMPDIR_API}/.tmp_${label}"
+  # stdin is the raw subdomain stream
+  sed "s/^\.//" | grep -E "^[a-zA-Z0-9]([a-zA-Z0-9-]*\.)+${TARGET}$" | sort -u > "$tmpfile"
+  local n; n=$(wc -l < "$tmpfile")
+  cat "$tmpfile" >> "$FOUND"
+  printf "\r%-60s\r" " " > /dev/tty  # clear spinner line before printing
+  echo -e "${GREEN}[+] ${label}: ${n} entries${RESET}" > /dev/tty
 }
 
-PID1=$(_api "anubis"       "curl -s --max-time $API_TIMEOUT 'https://jldc.me/anubis/subdomains/$TARGET' | jq -r '.[]' 2>/dev/null | sed 's/^\\.//; /^$/d'")
-PID2=$(_api "rapiddns"     "curl -s --max-time $API_TIMEOUT 'https://rapiddns.io/subdomain/$TARGET?full=1' | grep -oE '[a-zA-Z0-9][.a-zA-Z0-9-]*\\.${TARGET}'")
-PID3=$(_api "crt.sh"       "curl -s --max-time $API_TIMEOUT 'https://crt.sh/?q=%25.${TARGET}' | grep -oE '[a-zA-Z0-9][.a-zA-Z0-9-]*\\.${TARGET}'")
-PID4=$(_api "hackertarget" "curl -s --max-time $API_TIMEOUT 'https://api.hackertarget.com/hostsearch/?q=${TARGET}' | cut -d',' -f1")
-PID5=$(_api "otx"          "curl -s --max-time $API_TIMEOUT 'https://otx.alienvault.com/api/v1/indicators/domain/${TARGET}/passive_dns' | jq -r '.passive_dns[].hostname' 2>/dev/null")
+(timeout "$API_TIMEOUT" curl -s --max-time "$API_TIMEOUT" \
+  "https://jldc.me/anubis/subdomains/$TARGET" \
+  | jq -r ".[]" 2>/dev/null \
+  | _fetch_and_report anubis) &
+P1=$!
 
-# Spinner while background jobs run
+(timeout "$API_TIMEOUT" curl -s --max-time "$API_TIMEOUT" \
+  "https://rapiddns.io/subdomain/$TARGET?full=1" \
+  | grep -oE "([a-zA-Z0-9][a-zA-Z0-9-]*\.)+${TARGET}" \
+  | _fetch_and_report rapiddns) &
+P2=$!
+
+# crt.sh JSON API — much cleaner than scraping HTML
+(timeout "$API_TIMEOUT" curl -s --max-time "$API_TIMEOUT" \
+  "https://crt.sh/?q=%25.${TARGET}&output=json" \
+  | jq -r ".[].name_value" 2>/dev/null \
+  | tr "," "\n" | sed "s/^\*\.//" \
+  | _fetch_and_report crtsh) &
+P3=$!
+
+(timeout "$API_TIMEOUT" curl -s --max-time "$API_TIMEOUT" \
+  "https://api.hackertarget.com/hostsearch/?q=$TARGET" \
+  | cut -d"," -f1 \
+  | _fetch_and_report hackertarget) &
+P4=$!
+
+(timeout "$API_TIMEOUT" curl -s --max-time "$API_TIMEOUT" \
+  "https://otx.alienvault.com/api/v1/indicators/domain/$TARGET/passive_dns" \
+  | jq -r ".passive_dns[].hostname" 2>/dev/null \
+  | _fetch_and_report otx) &
+P5=$!
+
+# Spinner on /dev/tty — not captured by tee
 _spin() {
-  local frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏') i=0
-  while kill -0 $PID1 $PID2 $PID3 $PID4 $PID5 2>/dev/null; do
+  local frames=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏") i=0
+  while kill -0 $P1 $P2 $P3 $P4 $P5 2>/dev/null; do
     local n; n=$(wc -l < "$FOUND" 2>/dev/null || echo 0)
-    printf "\r${YELLOW}  %s  Querying APIs... (%d entries so far)   ${RESET}" "${frames[$i]}" "$n"
-    i=$(( (i+1) % 10 )); sleep 0.15
+    printf "\r\033[33m  %s  Querying APIs... (%d entries)   \033[0m" "${frames[$i]}" "$n" > /dev/tty
+    i=$(( (i+1) % 10 )); sleep 0.2
   done
-  printf "\r%-60s\r" " "
+  printf "\r%-60s\r" " " > /dev/tty
 }
-_spin
+_spin &
+SPIN_PID=$!
 
-wait
+wait $P1; wait $P2; wait $P3; wait $P4; wait $P5
+kill $SPIN_PID 2>/dev/null; wait $SPIN_PID 2>/dev/null
+printf "\r%-60s\r" " " > /dev/tty
+rm -f "${TMPDIR_API}"/.tmp_*
+
 sort -u "$FOUND" -o "$FOUND"
-echo -e "${GREEN}[+] Passive API collection done — $(wc -l < "$FOUND") entries${RESET}"
+echo -e "${GREEN}[+] Passive API total — $(wc -l < "$FOUND") unique entries${RESET}"
 
 section "TOOL-BASED SUBDOMAIN ENUM"
-check_tool findomain   && findomain -t "$TARGET" -q 2>/dev/null | clean_subs >> "$SUBDOMAIN_PATH/found_subdomain.txt"
-check_tool subfinder   && subfinder -silent -d "$TARGET" 2>/dev/null | clean_subs >> "$SUBDOMAIN_PATH/found_subdomain.txt"
-check_tool assetfinder && assetfinder --subs-only "$TARGET" 2>/dev/null | clean_subs >> "$SUBDOMAIN_PATH/found_subdomain.txt"
-check_tool sublist3r   && sublist3r -d "$TARGET" -o "$SUBDOMAIN_PATH/sublist3r.txt" -q 2>/dev/null && \
-  clean_subs < "$SUBDOMAIN_PATH/sublist3r.txt" >> "$SUBDOMAIN_PATH/found_subdomain.txt"
 
-# DNS brute (faster wordlist by default)
+_tool_run() {
+  # Usage: _tool_run <label> <cmd...>
+  # Runs cmd, pipes through clean_subs, appends to found_subdomain, prints count
+  local label="$1"; shift
+  local tmp; tmp=$(mktemp)
+  "$@" 2>/dev/null | clean_subs > "$tmp"
+  local n; n=$(wc -l < "$tmp")
+  cat "$tmp" >> "$SUBDOMAIN_PATH/found_subdomain.txt"
+  rm -f "$tmp"
+  [ "$n" -gt 0 ] && echo -e "${GREEN}[+] $label: $n subdomains${RESET}"                  || echo -e "${YELLOW}[!] $label: 0 results${RESET}"
+}
+
+if check_tool findomain; then
+  _tool_run findomain findomain -t "$TARGET" -q
+fi
+
+if check_tool subfinder; then
+  _tool_run subfinder subfinder -silent -d "$TARGET"
+fi
+
+if check_tool assetfinder; then
+  _tool_run assetfinder assetfinder --subs-only "$TARGET"
+fi
+
+# sublist3r: pipe stdout through clean_subs; -n suppresses banner; no -q flag
+if check_tool sublist3r; then
+  _tool_run sublist3r sublist3r -d "$TARGET" -n -o /dev/stdout
+fi
+
+# DNS brute
 if check_tool gobuster; then
   WORDLIST="/usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt"
   [ ! -f "$WORDLIST" ] && WORDLIST="/usr/share/wordlists/dirb/common.txt"
-  gobuster dns -d "$TARGET" -w "$WORDLIST" -q 2>/dev/null | \
-    grep -oE "[a-zA-Z0-9][\.a-zA-Z0-9-]*\.$TARGET" | clean_subs >> "$SUBDOMAIN_PATH/found_subdomain.txt"
+  if [ -f "$WORDLIST" ]; then
+    _tool_run gobuster gobuster dns -d "$TARGET" -w "$WORDLIST" --no-color -q
+  else
+    echo -e "${YELLOW}[!] gobuster: no wordlist found — skipping${RESET}"
+  fi
 fi
 
 # Amass — slow, skip with --skip-slow
