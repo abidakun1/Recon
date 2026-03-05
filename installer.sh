@@ -19,8 +19,36 @@ warn() { echo -e "${YELLOW}[!] $1 — skipping${RESET}"; }
 fail() { echo -e "${RED}[-] $1${RESET}"; }
 
 # ============================================================
+# FIX GO PATH (sudo loses the user's PATH)
+# ============================================================
+# Try common Go install locations
+for GO_CANDIDATE in /usr/local/go/bin/go /usr/bin/go /snap/bin/go; do
+  if [ -x "$GO_CANDIDATE" ]; then
+    export PATH="$(dirname $GO_CANDIDATE):$PATH"
+    break
+  fi
+done
+
+# If Go still not found, install it
+if ! command -v go &>/dev/null; then
+  warn "Go not found — installing Go 1.22"
+  wget -q https://go.dev/dl/go1.22.4.linux-amd64.tar.gz -O /tmp/go.tar.gz
+  rm -rf /usr/local/go
+  tar -C /usr/local -xzf /tmp/go.tar.gz
+  rm /tmp/go.tar.gz
+  export PATH="/usr/local/go/bin:$PATH"
+  # Persist for future shells
+  echo 'export PATH=/usr/local/go/bin:$PATH' >> /etc/profile.d/golang.sh
+  ok "Go installed: $(go version)"
+else
+  ok "Go found: $(go version)"
+fi
+
+export GOPATH=$HOME/go
+export PATH=$PATH:$GOPATH/bin
+
+# ============================================================
 # APT PACKAGES
-# New vs original: added gobuster, jq, gowitness deps, katana deps
 # ============================================================
 LIST_OF_APPS="
   wapiti cargo amass dirsearch sublist3r subfinder assetfinder
@@ -37,34 +65,32 @@ ok "APT packages installed"
 
 # ============================================================
 # GO TOOLS
-# New vs original: added katana, gowitness
 # ============================================================
-export GOPATH=$HOME/go
-export PATH=$PATH:/usr/local/go/bin:$GOPATH/bin
-
 install_go_tool() {
   local name=$1
   local pkg=$2
-  go install "$pkg" 2>/dev/null && cp "$GOPATH/bin/$(basename ${pkg%@*})" /usr/bin/ 2>/dev/null
-  command -v "$(basename ${pkg%@*})" &>/dev/null && ok "$name installed" || warn "$name failed"
+  local bin=$(basename ${pkg%@*})
+  go install "$pkg" 2>/dev/null
+  # Copy to /usr/bin so it works for all users without Go in PATH
+  [ -f "$GOPATH/bin/$bin" ] && cp "$GOPATH/bin/$bin" /usr/bin/ && ok "$name installed" || warn "$name failed"
 }
 
-install_go_tool "gau"      "github.com/lc/gau/v2/cmd/gau@latest"
-install_go_tool "katana"   "github.com/projectdiscovery/katana/cmd/katana@latest"
+install_go_tool "gau"       "github.com/lc/gau/v2/cmd/gau@latest"
+install_go_tool "katana"    "github.com/projectdiscovery/katana/cmd/katana@latest"
 install_go_tool "gowitness" "github.com/sensepost/gowitness@latest"
-install_go_tool "httpx"    "github.com/projectdiscovery/httpx/cmd/httpx@latest"
+install_go_tool "httpx"     "github.com/projectdiscovery/httpx/cmd/httpx@latest"
 
 # ============================================================
-# UNFURL (same as original, updated to newer version)
+# UNFURL
 # ============================================================
-UNFURL_URL="https://github.com/tomnomnom/unfurl/releases/download/v0.4.3/unfurl-linux-amd64-0.4.3.tgz"
-wget -q "$UNFURL_URL" -O /tmp/unfurl.tgz && \
+wget -q "https://github.com/tomnomnom/unfurl/releases/download/v0.4.3/unfurl-linux-amd64-0.4.3.tgz" \
+  -O /tmp/unfurl.tgz && \
   tar xzf /tmp/unfurl.tgz -C /tmp && \
   mv /tmp/unfurl /usr/bin/ && \
   ok "unfurl installed" || warn "unfurl failed"
 
 # ============================================================
-# AQUATONE (same as original)
+# AQUATONE
 # ============================================================
 wget -q "https://github.com/michenriksen/aquatone/releases/download/v1.7.0/aquatone_linux_amd64_1.7.0.zip" \
   -O /tmp/aquatone.zip && \
@@ -73,7 +99,7 @@ wget -q "https://github.com/michenriksen/aquatone/releases/download/v1.7.0/aquat
   ok "aquatone installed" || warn "aquatone failed"
 
 # ============================================================
-# FINDOMAIN (same as original but cleaner)
+# FINDOMAIN
 # ============================================================
 if ! command -v findomain &>/dev/null; then
   cd /tmp && git clone -q https://github.com/Edu4rdSHL/findomain.git && \
@@ -85,9 +111,9 @@ else
 fi
 
 # ============================================================
-# SECLISTS (apt version is often outdated — use git)
+# SECLISTS — skip if already installed via apt (Kali has it)
 # ============================================================
-if [ ! -d "/usr/share/seclists" ]; then
+if [ ! -d "/usr/share/seclists" ] && [ ! -d "/usr/share/wordlists/seclists" ]; then
   git clone -q --depth 1 https://github.com/danielmiessler/SecLists.git /usr/share/seclists && \
     ok "SecLists installed" || warn "SecLists clone failed"
 else
@@ -102,5 +128,5 @@ apt-get autoremove -y &>/dev/null
 apt-get clean &>/dev/null
 
 echo ""
-ok "ALL DONE"
+ok "ALL DONE — re-open your terminal or run: source /etc/profile.d/golang.sh"
 exit 0
